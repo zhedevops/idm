@@ -1,4 +1,4 @@
-package database_test
+package tests
 
 import (
 	"github.com/stretchr/testify/assert"
@@ -50,7 +50,7 @@ func TestGetRootConfig(t *testing.T) {
 	a := assert.New(t)
 	got, err := common.GetConfig("../.env", true)
 	a.Empty(err, "err must not be empty")
-	a.NotEmpty(got.DbDriverName, "DbDriverName must be empty")
+	a.NotEmpty(got.DbDriverName, "DbDriverName must be not empty")
 	a.NotEmpty(got.Dsn, "Dsn must be not empty")
 }
 

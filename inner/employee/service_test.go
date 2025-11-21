@@ -3,6 +3,8 @@ package employee
 import (
 	"errors"
 	"fmt"
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"testing"
@@ -48,6 +50,21 @@ func (m *MockRepo) DeleteById(id int64) (int64, error) {
 func (m *MockRepo) DeleteByIds(ids []int64) (int64, error) {
 	args := m.Called(ids)
 	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockRepo) BeginTransaction() (*sqlx.Tx, error) {
+	args := m.Called()
+	return args.Get(0).(*sqlx.Tx), args.Error(1)
+}
+
+func (m *MockRepo) FindByNameTx(tx *sqlx.Tx, name string) (bool, error) {
+	args := m.Called(tx, name)
+	return args.Get(0).(bool), args.Error(1)
+}
+
+func (m *MockRepo) CreateTx(tx *sqlx.Tx, e Entity) error {
+	args := m.Called(tx, e)
+	return args.Error(0)
 }
 
 func TestFindById(t *testing.T) {
@@ -243,5 +260,109 @@ func TestDeleteByIds(t *testing.T) {
 		var response, got = svc.DeleteByIds(ids)
 		a.NotNil(got)
 		a.Equal(int64(0), response)
+	})
+}
+
+func TestCreateEmployee(t *testing.T) {
+	var a = assert.New(t)
+	var entity = Entity{
+		Name: "Uncle Bob",
+	}
+
+	t.Run("success begin transaction and create employee", func(t *testing.T) {
+		var repo = new(MockRepo)
+		var svc = NewService(repo)
+		db, mock, err := sqlmock.New()
+		a.Nil(err)
+		sqlxDB := sqlx.NewDb(db, "sqlmock")
+		mock.ExpectBegin()  // ожидаем транзакцию
+		mock.ExpectCommit() // ожидаем коммит
+
+		tx, err := sqlxDB.Beginx()
+		a.Nil(err)
+		repo.On("BeginTransaction").Return(tx, nil)
+		repo.On("FindByNameTx", tx, entity.Name).Return(false, nil)
+		repo.On("CreateTx", tx, entity).Return(nil)
+		err = svc.CreateEmployee(entity)
+		a.Nil(err)
+	})
+
+	t.Run("failure begin transaction", func(t *testing.T) {
+		var repo = new(MockRepo)
+		var svc = NewService(repo)
+		db, mock, err := sqlmock.New()
+		a.Nil(err)
+		sqlxDB := sqlx.NewDb(db, "sqlmock")
+		mock.ExpectBegin()  // ожидаем транзакцию
+		mock.ExpectRollback() // ожидаем откат
+
+		tx, err := sqlxDB.Beginx()
+		a.Nil(err)
+		err = errors.New("transaction not begin")
+		var want = fmt.Errorf("error creating transaction: %w", err)
+		repo.On("BeginTransaction").Return(tx, want)
+		err = svc.CreateEmployee(entity)
+		a.NotNil(err)
+	})
+
+	t.Run("failure on FindByNameTx", func(t *testing.T) {
+		var repo = new(MockRepo)
+		var svc = NewService(repo)
+		db, mock, err := sqlmock.New()
+		a.Nil(err)
+		sqlxDB := sqlx.NewDb(db, "sqlmock")
+		mock.ExpectBegin()    // ожидаем транзакцию
+		mock.ExpectRollback() // ожидаем откат
+		tx, err := sqlxDB.Beginx()
+		a.Nil(err)
+		var entityNone = Entity{
+			Name: "None",
+		}
+		err = errors.New("finding error")
+		var want = fmt.Errorf("error finding employee by name: %w", err)
+		repo.On("BeginTransaction").Return(tx, nil)
+		repo.On("FindByNameTx", tx, entityNone.Name).Return(false, err)
+		err = svc.CreateEmployee(entityNone)
+		a.NotNil(err)
+		a.Equal(want, err)
+	})
+
+	t.Run("entity already exists", func(t *testing.T) {
+		var repo = new(MockRepo)
+		var svc = NewService(repo)
+		db, mock, err := sqlmock.New()
+		a.Nil(err)
+		sqlxDB := sqlx.NewDb(db, "sqlmock")
+		mock.ExpectBegin()    // ожидаем транзакцию
+		mock.ExpectRollback() // ожидаем откат
+		tx, err := sqlxDB.Beginx()
+		a.Nil(err)
+		err = errors.New("already exists")
+		var want = fmt.Errorf("error finding employee by name: %w", err)
+		repo.On("BeginTransaction").Return(tx, nil)
+		repo.On("FindByNameTx", tx, entity.Name).Return(true, err)
+		err = svc.CreateEmployee(entity)
+		a.NotNil(err)
+		a.Equal(want, err)
+	})
+
+	t.Run("error create employee", func(t *testing.T) {
+		var repo = new(MockRepo)
+		var svc = NewService(repo)
+		db, mock, err := sqlmock.New()
+		a.Nil(err)
+		sqlxDB := sqlx.NewDb(db, "sqlmock")
+		mock.ExpectBegin()    // ожидаем транзакцию
+		mock.ExpectRollback() // ожидаем откат
+		tx, err := sqlxDB.Beginx()
+		a.Nil(err)
+		err = errors.New("something wrong")
+		var want = fmt.Errorf("error create employee: %w", err)
+		repo.On("BeginTransaction").Return(tx, nil)
+		repo.On("FindByNameTx", tx, entity.Name).Return(false, nil)
+		repo.On("CreateTx", tx, entity).Return(err)
+		err = svc.CreateEmployee(entity)
+		a.NotNil(err)
+		a.Equal(want, err)
 	})
 }

@@ -2,6 +2,7 @@ package employee
 
 import (
 	"fmt"
+	"github.com/jmoiron/sqlx"
 )
 
 // Структура сервиса, которая будет инкапсулировать бизнес-логику
@@ -20,6 +21,9 @@ type Repo interface {
 	FilterByIDs([]int64) ([]Entity, error)
 	DeleteById(int64) (int64, error)
 	DeleteByIds([]int64) (int64, error)
+	BeginTransaction() (*sqlx.Tx, error)
+	FindByNameTx(*sqlx.Tx, string) (bool, error)
+	CreateTx(*sqlx.Tx, Entity) error
 }
 
 func NewService(repo Repo) *Service {
@@ -97,4 +101,49 @@ func (srv *Service) DeleteByIds(ids []int64) (int64, error) {
 	}
 
 	return count, nil
+}
+
+func (svc *Service) CreateEmployee(e Entity) (err error) {
+	tx, err := svc.repo.BeginTransaction()
+
+	// отложенная функция завершения транзакции
+	defer func() {
+		// проверяем, не было ли паники
+		if r := recover(); r != nil {
+			err = fmt.Errorf("creating employee panic: %v", r)
+			// если была паника, то откатываем транзакцию
+			errTx := tx.Rollback()
+			if errTx != nil {
+				err = fmt.Errorf("creating employee: rolling back transaction errors: %w, %w", err, errTx)
+			}
+		} else if err != nil {
+			// если произошла другая ошибка (не паника), то откатываем транзакцию
+			errTx := tx.Rollback()
+			if errTx != nil {
+				err = fmt.Errorf("creating employee: rolling back transaction errors: %w, %w", err, errTx)
+			}
+		} else {
+			// если ошибок нет, то коммитим транзакцию
+			errTx := tx.Commit()
+			if errTx != nil {
+				err = fmt.Errorf("creating employee: commiting transaction error: %w", errTx)
+			}
+		}
+	}()
+
+	if err != nil {
+		return fmt.Errorf("error creating transaction: %w", err)
+	}
+
+	isExists, err := svc.repo.FindByNameTx(tx, e.Name)
+	if err != nil {
+		return fmt.Errorf("error finding employee by name: %w", err)
+	}
+	if isExists == false {
+		err = svc.repo.CreateTx(tx, e)
+	}
+	if err != nil {
+		return fmt.Errorf("error create employee: %w", err)
+	}
+	return nil
 }

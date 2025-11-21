@@ -97,3 +97,22 @@ func (r *Repository) DeleteByIds(ids []int64) (int64, error) {
 	}
 	return rows, nil
 }
+
+func (r *Repository) BeginTransaction() (tx *sqlx.Tx, err error) {
+	return r.db.Beginx()
+}
+
+func (r *Repository) FindByNameTx(tx *sqlx.Tx, name string) (isExists bool, err error) {
+	err = tx.Get(
+		&isExists,
+		"SELECT EXISTS (SELECT 1 FROM employee WHERE name = $1)",
+		name,
+	)
+	return isExists, err
+}
+
+func (r *Repository) CreateTx(tx *sqlx.Tx, e Entity) error {
+	query := `INSERT INTO employee (name) VALUES (:name)`
+	_, err := tx.NamedExec(query, e)
+	return err
+}

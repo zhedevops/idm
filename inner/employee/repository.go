@@ -111,8 +111,19 @@ func (r *Repository) FindByNameTx(tx *sqlx.Tx, name string) (isExists bool, err 
 	return isExists, err
 }
 
-func (r *Repository) CreateTx(tx *sqlx.Tx, e Entity) error {
-	query := `INSERT INTO employee (name) VALUES (:name)`
-	_, err := tx.NamedExec(query, e)
-	return err
+func (r *Repository) CreateTx(tx *sqlx.Tx, request CreateRequest) (employeeId int64, err error) {
+	var e = request.ToEntity()
+	query := `INSERT INTO employee (name) VALUES (:name) RETURNING id`
+	res, err := tx.NamedQuery(query, e)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	if res.Next() {
+		if err := res.Scan(&employeeId); err != nil {
+			return 0, err
+		}
+	}
+	return employeeId, err
 }

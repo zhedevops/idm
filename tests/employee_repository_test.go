@@ -76,15 +76,15 @@ func TestEmployeeRepository(t *testing.T) {
 	t.Run("Few query in TX", func(t *testing.T) {
 		tx, err := Repository.BeginTransaction()
 		a.Nil(err, "BeginTransaction: expected error to be nil")
-		var entity = employee.Entity{
+		var request = employee.CreateRequest{
 			Name: "Uncle Bob",
 		}
-		isExists, err := Repository.FindByNameTx(tx, entity.Name)
+		isExists, err := Repository.FindByNameTx(tx, request.Name)
 		a.False(isExists)
 		a.Nil(err, "FindByNameTx: expected error to be nil")
-		err = Repository.CreateTx(tx, entity)
+		_, err = Repository.CreateTx(tx, request)
 		a.Nil(err, "CreateTx: expected error to be nil")
-		isExists, err = Repository.FindByNameTx(tx, entity.Name)
+		isExists, err = Repository.FindByNameTx(tx, request.Name)
 		a.True(isExists)
 		a.Nil(err, "FindByNameTx2: expected error to be nil")
 		errTx := tx.Commit()

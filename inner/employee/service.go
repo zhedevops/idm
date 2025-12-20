@@ -3,11 +3,29 @@ package employee
 import (
 	"fmt"
 	"github.com/jmoiron/sqlx"
+	"github.com/zhedevops/idm/inner/common"
 )
 
 // Структура сервиса, которая будет инкапсулировать бизнес-логику
 type Service struct {
-	repo Repo
+	repo      Repo
+	validator Validator
+}
+
+type CreateRequest struct {
+	Name string `json:"name" validate:"required,min=2,max=155"`
+}
+
+type ParamIdRequest struct {
+	Id int64 `validate:"required,gt=0"`
+}
+
+type ParamIdsRequest struct {
+	Ids []int64 `validate:"required,min=1,dive,gt=0"`
+}
+
+type Validator interface {
+	Validate(request any) error
 }
 
 // Согласно идеологии Go:
@@ -23,19 +41,28 @@ type Repo interface {
 	DeleteByIds([]int64) (int64, error)
 	BeginTransaction() (*sqlx.Tx, error)
 	FindByNameTx(*sqlx.Tx, string) (bool, error)
-	CreateTx(*sqlx.Tx, Entity) error
+	CreateTx(*sqlx.Tx, CreateRequest) (int64, error)
 }
 
-func NewService(repo Repo) *Service {
+func NewService(repo Repo, validator Validator) *Service {
 	return &Service{
-		repo: repo,
+		repo:      repo,
+		validator: validator,
 	}
 }
 
-func (srv *Service) FindById(id int64) (Response, error) {
-	var entity, err = srv.repo.FindById(id)
+func (req *CreateRequest) ToEntity() Entity {
+	return Entity{Name: req.Name}
+}
+
+func (srv *Service) FindById(request ParamIdRequest) (Response, error) {
+	var err = srv.validator.Validate(request)
 	if err != nil {
-		return Response{}, fmt.Errorf("error finding employee with id %d: %w", id, err)
+		return Response{}, common.RequestValidationError{Message: err.Error()}
+	}
+	entity, err := srv.repo.FindById(request.Id)
+	if err != nil {
+		return Response{}, fmt.Errorf("error finding employee with id %d: %w", request.Id, err)
 	}
 
 	return entity.toResponse(), nil
@@ -72,8 +99,12 @@ func (srv *Service) FindAll() ([]Response, error) {
 	return resp, nil
 }
 
-func (srv *Service) FilterByIDs(ids []int64) ([]Response, error) {
-	var entities, err = srv.repo.FilterByIDs(ids)
+func (srv *Service) FilterByIDs(request ParamIdsRequest) ([]Response, error) {
+	var err = srv.validator.Validate(request)
+	if err != nil {
+		return []Response{}, common.RequestValidationError{Message: err.Error()}
+	}
+	entities, err := srv.repo.FilterByIDs(request.Ids)
 	if err != nil {
 		return []Response{}, fmt.Errorf("error get employees by ids: %w", err)
 	}
@@ -85,8 +116,12 @@ func (srv *Service) FilterByIDs(ids []int64) ([]Response, error) {
 	return resp, nil
 }
 
-func (srv *Service) DeleteById(id int64) (int64, error) {
-	var count, err = srv.repo.DeleteById(id)
+func (srv *Service) DeleteById(request ParamIdRequest) (int64, error) {
+	var err = srv.validator.Validate(request)
+	if err != nil {
+		return 0, common.RequestValidationError{Message: err.Error()}
+	}
+	count, err := srv.repo.DeleteById(request.Id)
 	if err != nil {
 		return 0, fmt.Errorf("error delete employee by id: %w", err)
 	}
@@ -94,8 +129,12 @@ func (srv *Service) DeleteById(id int64) (int64, error) {
 	return count, nil
 }
 
-func (srv *Service) DeleteByIds(ids []int64) (int64, error) {
-	var count, err = srv.repo.DeleteByIds(ids)
+func (srv *Service) DeleteByIds(request ParamIdsRequest) (int64, error) {
+	var err = srv.validator.Validate(request)
+	if err != nil {
+		return 0, common.RequestValidationError{Message: err.Error()}
+	}
+	count, err := srv.repo.DeleteByIds(request.Ids)
 	if err != nil {
 		return 0, fmt.Errorf("error delete employee by ids: %w", err)
 	}
@@ -103,8 +142,16 @@ func (srv *Service) DeleteByIds(ids []int64) (int64, error) {
 	return count, nil
 }
 
-func (svc *Service) CreateEmployee(e Entity) (err error) {
-	tx, err := svc.repo.BeginTransaction()
+// Метод для создания нового сотрудника
+// принимает на вход CreateRequest - структура запроса на создание сотрудника
+func (srv *Service) CreateEmployee(request CreateRequest) (int64, error) {
+	var err = srv.validator.Validate(request)
+	if err != nil {
+		// возвращаем кастомную ошибку в случае, если запрос не прошёл валидацию (про кастомные ошибки - дальше)
+		return 0, common.RequestValidationError{Message: err.Error()}
+	}
+
+	tx, err := srv.repo.BeginTransaction()
 
 	// отложенная функция завершения транзакции
 	defer func() {
@@ -132,18 +179,19 @@ func (svc *Service) CreateEmployee(e Entity) (err error) {
 	}()
 
 	if err != nil {
-		return fmt.Errorf("error creating transaction: %w", err)
+		return 0, fmt.Errorf("error creating transaction: %w", err)
 	}
 
-	isExists, err := svc.repo.FindByNameTx(tx, e.Name)
+	isExists, err := srv.repo.FindByNameTx(tx, request.Name)
 	if err != nil {
-		return fmt.Errorf("error finding employee by name: %w", err)
+		return 0, fmt.Errorf("error finding employee by name: %w", err)
 	}
-	if !isExists {
-		err = svc.repo.CreateTx(tx, e)
+	if isExists {
+		return 0, common.AlreadyExistsError{Message: fmt.Sprintf("employee with name %s already exists", request.Name)}
 	}
+	newEmployeeId, err := srv.repo.CreateTx(tx, request)
 	if err != nil {
-		return fmt.Errorf("error create employee: %w", err)
+		return 0, fmt.Errorf("error create employee with name: %s %w", request.Name, err)
 	}
-	return nil
+	return newEmployeeId, nil
 }
